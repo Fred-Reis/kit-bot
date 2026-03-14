@@ -7,7 +7,12 @@ from models import Event
 logger = get_logger("tenant_flow")
 
 
-async def handle_tenant_message(chat_id: str, message: str, user_id: int | None) -> None:
+async def handle_tenant_message(
+    chat_id: str,
+    message: str | None,
+    user_id: int | None,
+    media: dict | None = None,
+) -> None:
     logger.info("Tenant message received for %s", chat_id)
 
     db = SessionLocal()
@@ -16,7 +21,7 @@ async def handle_tenant_message(chat_id: str, message: str, user_id: int | None)
             user_id=user_id,
             chat_id=chat_id,
             type="tenant.received",
-            payload_json={"message": message},
+            payload_json={"message": message, "media": media},
         )
         db.add(event)
         db.commit()

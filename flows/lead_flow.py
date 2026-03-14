@@ -8,7 +8,7 @@ from db import SessionLocal
 from evolution_api import send_whatsapp_message
 from logger import get_logger
 from messages import lead as lead_messages
-from models import Conversation, Event, Profile, User
+from models import Conversation, Document, Event, Profile, User
 
 logger = get_logger("lead_flow")
 
@@ -85,7 +85,13 @@ def apply_contact_updates(
             profile.income = income
 
 
-def handle_start(message: str, context: dict, user: User | None, profile: Profile | None):
+def handle_start(
+    message: str,
+    context: dict,
+    user: User | None,
+    profile: Profile | None,
+    media: dict | None,
+):
     apply_profile_updates(message, context, user, profile)
     has_cpf = bool(context.get("cpf"))
     has_name = bool(context.get("name"))
@@ -99,7 +105,13 @@ def handle_start(message: str, context: dict, user: User | None, profile: Profil
     return "lead.await_contact", lead_messages.CONTACT
 
 
-def handle_profile(message: str, context: dict, user: User | None, profile: Profile | None):
+def handle_profile(
+    message: str,
+    context: dict,
+    user: User | None,
+    profile: Profile | None,
+    media: dict | None,
+):
     apply_profile_updates(message, context, user, profile)
     has_cpf = bool(context.get("cpf"))
     has_name = bool(context.get("name"))
@@ -113,7 +125,13 @@ def handle_profile(message: str, context: dict, user: User | None, profile: Prof
     return "lead.await_contact", lead_messages.CONTACT
 
 
-def handle_contact(message: str, context: dict, profile: Profile | None):
+def handle_contact(
+    message: str,
+    context: dict,
+    user: User | None,
+    profile: Profile | None,
+    media: dict | None,
+):
     apply_contact_updates(message, context, profile)
     has_email = bool(context.get("email"))
     has_income = bool(context.get("income"))
@@ -125,11 +143,25 @@ def handle_contact(message: str, context: dict, profile: Profile | None):
     return "lead.await_documents", lead_messages.DOCS
 
 
-def handle_documents(message: str, context: dict):
+def handle_documents(
+    message: str,
+    context: dict,
+    user: User | None,
+    profile: Profile | None,
+    media: dict | None,
+):
+    if media:
+        return "lead.await_documents", lead_messages.DOCS_RECEIVED
     return "lead.await_documents", lead_messages.WAIT_DOCS
 
 
-def handle_fallback(message: str, context: dict):
+def handle_fallback(
+    message: str,
+    context: dict,
+    user: User | None,
+    profile: Profile | None,
+    media: dict | None,
+):
     return "lead.await_profile", lead_messages.FALLBACK
 
 
@@ -141,7 +173,12 @@ STATE_HANDLERS = {
 }
 
 
-async def handle_lead_message(chat_id: str, message: str, user_id: int | None) -> None:
+async def handle_lead_message(
+    chat_id: str,
+    message: str | None,
+    user_id: int | None,
+    media: dict | None = None,
+) -> None:
     logger.info("Lead message received for %s", chat_id)
     reply_text = None
 
@@ -172,12 +209,20 @@ async def handle_lead_message(chat_id: str, message: str, user_id: int | None) -
         context = dict(conversation.context_json or {})
 
         handler = STATE_HANDLERS.get(state, handle_fallback)
-        if handler in (handle_start, handle_profile):
-            new_state, reply_text = handler(message, context, user, profile)
-        elif handler is handle_contact:
-            new_state, reply_text = handler(message, context, profile)
-        else:
-            new_state, reply_text = handler(message, context)
+        new_state, reply_text = handler(message, context, user, profile, media)
+
+        if media and media.get("path") and user_id:
+            document = Document(
+                user_id=user_id,
+                type=media.get("type"),
+                status="received",
+                path=media.get("path"),
+                extracted_json={
+                    "mime": media.get("mime"),
+                    "message_id": media.get("message_id"),
+                },
+            )
+            db.add(document)
 
         conversation.state = new_state
         conversation.context_json = context
@@ -190,6 +235,7 @@ async def handle_lead_message(chat_id: str, message: str, user_id: int | None) -
                 "message": message,
                 "state": state,
                 "new_state": new_state,
+                "media": media,
             },
         )
         db.add(event)

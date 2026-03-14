@@ -6,7 +6,11 @@ from flows.tenant_flow import handle_tenant_message
 from models import Lease, User
 
 
-async def route_message(chat_id: str, message: str) -> None:
+async def route_message(
+    chat_id: str,
+    message: str | None,
+    media: dict | None = None,
+) -> None:
     db = SessionLocal()
     try:
         user = db.execute(
@@ -30,6 +34,6 @@ async def route_message(chat_id: str, message: str) -> None:
         db.close()
 
     if lease_exists:
-        await handle_tenant_message(chat_id, message, user.id)
+        await handle_tenant_message(chat_id, message, user.id, media)
     else:
-        await handle_lead_message(chat_id, message, user.id)
+        await handle_lead_message(chat_id, message, user.id, media)

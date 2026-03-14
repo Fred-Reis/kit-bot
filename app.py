@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from config import AUTO_CREATE_DB, LOG_PAYLOADS
 from db import Base, SessionLocal, engine
 from logger import get_logger
+from message_processor import process_inbound_media
 from messages_buffer import buffer_message
 from models import Event
 from schemas import InboundMessage
@@ -40,8 +41,10 @@ def extract_inbound_message(payload: dict) -> InboundMessage | None:
     text = None
     media_url = None
     media_mime = None
+    media_base64 = None
 
     if isinstance(msg, dict):
+        media_base64 = msg.get("base64")
         if "conversation" in msg:
             message_type = "text"
             text = msg.get("conversation")
@@ -68,10 +71,29 @@ def extract_inbound_message(payload: dict) -> InboundMessage | None:
         text=text,
         media_url=media_url,
         media_mime=media_mime,
+        media_base64=media_base64,
         sender_name=sender_name,
         timestamp=timestamp,
         raw_payload=payload,
     )
+
+
+def redact_payload(payload: dict) -> dict:
+    safe = dict(payload)
+    data = safe.get("data")
+    if isinstance(data, dict):
+        message = data.get("message")
+        if isinstance(message, dict) and "base64" in message:
+            message = dict(message)
+            base64_value = message.get("base64")
+            if isinstance(base64_value, str):
+                message["base64"] = f"<omitted:{len(base64_value)} chars>"
+            else:
+                message["base64"] = "<omitted>"
+            data = dict(data)
+            data["message"] = message
+            safe["data"] = data
+    return safe
 
 
 def persist_inbound_event(inbound: InboundMessage) -> None:
@@ -110,7 +132,7 @@ async def webhook(request: Request):
     """
     payload = await request.json()
     if LOG_PAYLOADS:
-        logger.info("Webhook payload: %s", payload)
+        logger.info("Webhook payload: %s", redact_payload(payload))
     inbound = extract_inbound_message(payload)
 
     if not inbound or "@g.us" in inbound.chat_id:
@@ -124,5 +146,7 @@ async def webhook(request: Request):
             message=inbound.text,
             message_id=inbound.message_id,
         )
+    elif inbound.message_type in ("image", "document") and inbound.media_base64:
+        await process_inbound_media(inbound)
 
     return {"status": "ok"}

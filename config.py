@@ -30,3 +30,5 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 AUTO_CREATE_DB = os.getenv("AUTO_CREATE_DB", "false").lower() == "true"
 LOG_PAYLOADS = os.getenv("LOG_PAYLOADS", "false").lower() == "true"
+
+MEDIA_DIR = os.getenv("MEDIA_DIR", "media")
