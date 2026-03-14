@@ -1,11 +1,6 @@
-def log(*args):
-    """
-    Prints a message to the console with a "[PROCESSOR]" prefix.
+from logger import get_logger
 
-    Args:
-        *args: The message to be printed.
-    """
-    print("[PROCESSOR]", *args)
+logger = get_logger("processor")
 
 
 async def process_grouped_message(chat_id: str, message: str) -> None:
@@ -14,5 +9,5 @@ async def process_grouped_message(chat_id: str, message: str) -> None:
 
     This is the central processing point. Router integration will be added here.
     """
-    log(f"Processing grouped message for {chat_id}: {message}")
+    logger.info("Processing grouped message for %s: %s", chat_id, message)
     # TODO: route message

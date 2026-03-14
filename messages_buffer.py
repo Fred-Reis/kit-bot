@@ -11,6 +11,7 @@ from config import (
     DEBOUNCE_SECONDS,
     REDIS_URL,
 )
+from logger import get_logger
 from message_processor import process_grouped_message
 
 redis_client = redis.Redis.from_url(
@@ -19,16 +20,7 @@ redis_client = redis.Redis.from_url(
 )
 debounce_tasks = defaultdict(asyncio.Task)
 BUFFER_TTL_SECONDS = int(BUFFER_TTL) if BUFFER_TTL else 3600
-
-
-def log(*args):
-    """
-    Prints a message to the console with a "[BUFFER]" prefix.
-
-    Args:
-        *args: The message to be printed.
-    """
-    print("[BUFFER]", *args)
+logger = get_logger("buffer")
 
 
 async def is_duplicate_message(chat_id: str, message_id: str | None) -> bool:
@@ -63,7 +55,7 @@ async def buffer_message(chat_id: str, message: str, message_id: str | None = No
     :param message_id: The message id for idempotency.
     """
     if await is_duplicate_message(chat_id, message_id):
-        log(f"Duplicate message ignored for {chat_id}: {message_id}")
+        logger.warning("Duplicate message ignored for %s: %s", chat_id, message_id)
         return
 
     buffer_key = f"{chat_id}{BUFFER_KEY_SUFFIX}"
@@ -71,11 +63,11 @@ async def buffer_message(chat_id: str, message: str, message_id: str | None = No
     await redis_client.rpush(buffer_key, message)
     await redis_client.expire(buffer_key, BUFFER_TTL_SECONDS)
 
-    log(f"Added buffer message from {chat_id}: {message}")
+    logger.info("Added buffer message from %s: %s", chat_id, message)
 
     if debounce_tasks.get(chat_id):
         debounce_tasks[chat_id].cancel()
-        log(f"Cleared debounce for: {chat_id}")
+        logger.info("Cleared debounce for: %s", chat_id)
 
     debounce_tasks[chat_id] = asyncio.create_task(handle_debounce(chat_id))
 
@@ -90,7 +82,7 @@ async def handle_debounce(chat_id: str):
     :param chat_id: The chat id to handle the debounce for.
     """
     try:
-        log(f"Debounce initialized to {chat_id}")
+        logger.info("Debounce initialized to %s", chat_id)
         await asyncio.sleep(float(DEBOUNCE_SECONDS))
 
         buffer_key = f"{chat_id}{BUFFER_KEY_SUFFIX}"
@@ -99,11 +91,14 @@ async def handle_debounce(chat_id: str):
         full_message = " ".join(messages).strip()
 
         if full_message:
-            log(f"Sending grouped messages to processor from: {chat_id} - {full_message}")
+            logger.info(
+                "Sending grouped messages to processor from: %s - %s",
+                chat_id,
+                full_message,
+            )
             await process_grouped_message(chat_id, full_message)
 
         await redis_client.delete(buffer_key)
 
     except asyncio.CancelledError:
-        log(f"Debouncing canceled to: {chat_id}")
-
+        logger.info("Debouncing canceled to: %s", chat_id)

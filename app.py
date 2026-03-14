@@ -3,11 +3,13 @@
 from fastapi import FastAPI, Request
 
 from db import SessionLocal
+from logger import get_logger
 from messages_buffer import buffer_message
 from models import Event
 from schemas import InboundMessage
 
 app = FastAPI()
+logger = get_logger("webhook")
 
 def extract_inbound_message(payload: dict) -> InboundMessage | None:
     data = payload.get("data") or {}
@@ -82,7 +84,7 @@ def persist_inbound_event(inbound: InboundMessage) -> None:
         db.commit()
     except Exception as exc:
         db.rollback()
-        print("[WEBHOOK] Failed to persist inbound event:", exc)
+        logger.exception("Failed to persist inbound event: %s", exc)
     finally:
         db.close()
 
