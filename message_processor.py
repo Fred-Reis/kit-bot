@@ -1,3 +1,4 @@
+from flows.router import route_message
 from logger import get_logger
 
 logger = get_logger("processor")
@@ -10,4 +11,4 @@ async def process_grouped_message(chat_id: str, message: str) -> None:
     This is the central processing point. Router integration will be added here.
     """
     logger.info("Processing grouped message for %s: %s", chat_id, message)
-    # TODO: route message
+    await route_message(chat_id, message)

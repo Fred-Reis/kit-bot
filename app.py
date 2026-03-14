@@ -1,6 +1,7 @@
 """app class, the main entrypoint to use FastAPI."""
 
 from fastapi import FastAPI, Request
+from sqlalchemy.exc import SQLAlchemyError
 
 from db import SessionLocal
 from logger import get_logger
@@ -82,7 +83,7 @@ def persist_inbound_event(inbound: InboundMessage) -> None:
         )
         db.add(event)
         db.commit()
-    except Exception as exc:
+    except SQLAlchemyError as exc:
         db.rollback()
         logger.exception("Failed to persist inbound event: %s", exc)
     finally:
