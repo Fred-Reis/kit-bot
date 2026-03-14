@@ -47,6 +47,7 @@ services:
     depends_on:
       - evolution-api
       - redis
+      - postgres
     restart: always
     volumes:
       - ./vectorstore_data:/app/vectorstore
