@@ -1,0 +1,8 @@
+POST http://localhost:8080/message/sendText/halugar
+Content-Type: application/json
+apikey: H@lugar
+
+  {
+      "number": "5527997300401",
+      "text": "Plain text message, sent with the *Evolution-API* 🚀.\n\nHere you can send texts in *bold*, _italic_, ~strikethrough~ and ```monospaced```.\n\nYou can also use any available emoticon on WhatsApp, like these examples below:\n\n😉🤣🤩🤝👏👍🙏"
+  }

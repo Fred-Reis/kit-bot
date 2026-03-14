@@ -1,0 +1,5 @@
+[MESSAGES CONTROL]
+; disable=line-too-long
+
+[MAIN]
+max-line-length=150
