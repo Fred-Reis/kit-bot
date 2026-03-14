@@ -27,3 +27,6 @@ BUFFER_TTL = os.getenv("BUFFER_TTL")
 DEBOUNCE_SECONDS = os.getenv("DEBOUNCE_SECONDS")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+AUTO_CREATE_DB = os.getenv("AUTO_CREATE_DB", "false").lower() == "true"
+LOG_PAYLOADS = os.getenv("LOG_PAYLOADS", "false").lower() == "true"

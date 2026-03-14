@@ -3,7 +3,8 @@
 from fastapi import FastAPI, Request
 from sqlalchemy.exc import SQLAlchemyError
 
-from db import SessionLocal
+from config import AUTO_CREATE_DB, LOG_PAYLOADS
+from db import Base, SessionLocal, engine
 from logger import get_logger
 from messages_buffer import buffer_message
 from models import Event
@@ -11,6 +12,16 @@ from schemas import InboundMessage
 
 app = FastAPI()
 logger = get_logger("webhook")
+
+
+@app.on_event("startup")
+def startup():
+    if AUTO_CREATE_DB:
+        try:
+            Base.metadata.create_all(bind=engine)
+            logger.info("Database tables created or verified.")
+        except SQLAlchemyError as exc:
+            logger.exception("Failed to create tables: %s", exc)
 
 def extract_inbound_message(payload: dict) -> InboundMessage | None:
     data = payload.get("data") or {}
@@ -98,6 +109,8 @@ async def webhook(request: Request):
     Returns a JSON response with a single key "status" set to "ok".
     """
     payload = await request.json()
+    if LOG_PAYLOADS:
+        logger.info("Webhook payload: %s", payload)
     inbound = extract_inbound_message(payload)
 
     if not inbound or "@g.us" in inbound.chat_id:
