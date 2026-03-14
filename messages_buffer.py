@@ -5,21 +5,20 @@ from collections import defaultdict
 
 import redis.asyncio as redis
 
-from chains import get_conversational_rag_chain
 from config import (
     BUFFER_KEY_SUFFIX,
     BUFFER_TTL,
     DEBOUNCE_SECONDS,
     REDIS_URL,
 )
-from evolution_api import send_whatsapp_message
+from message_processor import process_grouped_message
 
 redis_client = redis.Redis.from_url(
     REDIS_URL,
     decode_responses=True,
 )
-convertional_rag_chain = get_conversational_rag_chain()
 debounce_tasks = defaultdict(asyncio.Task)
+BUFFER_TTL_SECONDS = int(BUFFER_TTL) if BUFFER_TTL else 3600
 
 
 def log(*args):
@@ -32,7 +31,24 @@ def log(*args):
     print("[BUFFER]", *args)
 
 
-async def buffer_message(chat_id: str, message: str):
+async def is_duplicate_message(chat_id: str, message_id: str | None) -> bool:
+    """
+    Returns True if the message has already been processed.
+    """
+    if not message_id:
+        return False
+
+    dedupe_key = f"{chat_id}:dedupe:{message_id}"
+    was_set = await redis_client.set(
+        dedupe_key,
+        "1",
+        ex=BUFFER_TTL_SECONDS,
+        nx=True,
+    )
+    return not was_set
+
+
+async def buffer_message(chat_id: str, message: str, message_id: str | None = None):
     """
     Buffers a message for a given chat id.
 
@@ -44,11 +60,16 @@ async def buffer_message(chat_id: str, message: str):
 
     :param chat_id: The chat id to buffer the message for.
     :param message: The message to be buffered.
+    :param message_id: The message id for idempotency.
     """
+    if await is_duplicate_message(chat_id, message_id):
+        log(f"Duplicate message ignored for {chat_id}: {message_id}")
+        return
+
     buffer_key = f"{chat_id}{BUFFER_KEY_SUFFIX}"
 
     await redis_client.rpush(buffer_key, message)
-    await redis_client.expire(buffer_key, BUFFER_TTL)
+    await redis_client.expire(buffer_key, BUFFER_TTL_SECONDS)
 
     log(f"Added buffer message from {chat_id}: {message}")
 
@@ -78,34 +99,11 @@ async def handle_debounce(chat_id: str):
         full_message = " ".join(messages).strip()
 
         if full_message:
-            log(f"Sending grouped messages to llm from: {chat_id} - {full_message}")
-            # TODO: move this block to a separated function
-            # Call router
-            # TODO: Until here
+            log(f"Sending grouped messages to processor from: {chat_id} - {full_message}")
+            await process_grouped_message(chat_id, full_message)
 
         await redis_client.delete(buffer_key)
 
     except asyncio.CancelledError:
         log(f"Debouncing canceled to: {chat_id}")
 
-
-def call_ai_service(message, chat_id):
-    """
-    Call the AI service to process the message.
-
-    Parameters
-    ----------
-    message : str
-        The message to be processed.
-
-    Returns
-    -------
-    response : str
-        The response from the AI service.
-
-
-    """
-    return convertional_rag_chain.invoke(
-        input={"question": message},
-        config={"configurable": {"session_id": chat_id}},
-    )["answer"]

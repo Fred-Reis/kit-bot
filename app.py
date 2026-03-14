@@ -106,6 +106,7 @@ async def webhook(request: Request):
         await buffer_message(
             chat_id=inbound.chat_id,
             message=inbound.text,
+            message_id=inbound.message_id,
         )
 
     return {"status": "ok"}
