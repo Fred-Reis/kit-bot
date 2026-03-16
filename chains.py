@@ -8,7 +8,7 @@ from config import (
     OPENAI_MODEL_TEMPERATURE,
 )
 from memory import get_session_history
-from prompts import contextualize_prompt, qa_prompt
+from prompts.rag import CONTEXTUALIZE_PROMPT, SYSTEM_PROMPT
 from vectorstore import get_vectorstore
 
 
@@ -16,7 +16,7 @@ def build_history_aware_retriever(llm, retriever):
     """
     Substitui create_history_aware_retriever
     """
-    contextualize_chain = contextualize_prompt | llm | StrOutputParser()
+    contextualize_chain = CONTEXTUALIZE_PROMPT | llm | StrOutputParser()
 
     def get_relevant_docs(input_dict):
         if input_dict.get("chat_history"):
@@ -42,7 +42,7 @@ def build_qa_chain(llm):
             "question": lambda x: x["question"],
             "chat_history": lambda x: x.get("chat_history", []),
         }
-        | qa_prompt
+        | SYSTEM_PROMPT
         | llm
         | StrOutputParser()
     )
