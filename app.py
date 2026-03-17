@@ -10,6 +10,7 @@ from message_processor import process_inbound_media
 from messages_buffer import buffer_message
 from models import Event
 from schemas import InboundMessage
+from services.property_catalog import bootstrap_property_catalog
 
 app = FastAPI()
 logger = get_logger("webhook")
@@ -17,12 +18,13 @@ logger = get_logger("webhook")
 
 @app.on_event("startup")
 def startup():
-    if AUTO_CREATE_DB:
-        try:
+    try:
+        if AUTO_CREATE_DB:
             Base.metadata.create_all(bind=engine)
             logger.info("Database tables created or verified.")
-        except SQLAlchemyError as exc:
-            logger.exception("Failed to create tables: %s", exc)
+        bootstrap_property_catalog()
+    except SQLAlchemyError as exc:
+        logger.exception("Failed to prepare database: %s", exc)
 
 def extract_inbound_message(payload: dict) -> InboundMessage | None:
     data = payload.get("data") or {}

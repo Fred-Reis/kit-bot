@@ -52,6 +52,7 @@ services:
     volumes:
       - ./vectorstore_data:/app/vectorstore
       - ./rag_files:/app/rag_files
+      - ./media:/app/media
 
 volumes:
   evolution_instances:

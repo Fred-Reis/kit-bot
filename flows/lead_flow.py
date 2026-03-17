@@ -1,16 +1,29 @@
 import re
 
 import requests
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from db import SessionLocal
 from evolution_api import send_whatsapp_message
 from logger import get_logger
-from messages import lead as lead_messages
 from models import Conversation, Document, Event, Profile, User
+from services.lead_agent import extract_lead_update
+from services.property_catalog import (
+    find_property_by_reference,
+    list_available_properties,
+    serialize_property,
+    summarize_property,
+)
+from services.lead_responder import generate_lead_reply
 
 logger = get_logger("lead_flow")
+
+DOCS_REQUIRED_COUNT = {"cnh": 2, "rg_cpf": 3}
+DOCS_RULES = {
+    "cnh_images_required": 2,
+    "rg_cpf_images_required": 3,
+}
 
 
 def normalize_whatsapp_number(chat_id: str) -> str:
@@ -40,14 +53,6 @@ def extract_income(text: str) -> str | None:
     return raw.replace(".", "").replace(",", ".")
 
 
-def extract_name(text: str) -> str | None:
-    cleaned = re.sub(r"[^A-Za-z\s]", " ", text)
-    parts = [p for p in cleaned.split() if len(p) > 1]
-    if len(parts) >= 2:
-        return " ".join(parts)
-    return None
-
-
 def apply_profile_updates(
     message: str,
     context: dict,
@@ -55,16 +60,15 @@ def apply_profile_updates(
     profile: Profile | None,
 ) -> None:
     cpf = extract_cpf(message)
-    name = extract_name(message)
 
     if cpf:
         context["cpf"] = cpf
         if profile:
             profile.cpf = cpf
-    if name:
-        context["name"] = name
-        if user and not user.name:
-            user.name = name
+
+    explicit_name = context.get("name")
+    if explicit_name and user and not user.name:
+        user.name = explicit_name
 
 
 def apply_contact_updates(
@@ -85,92 +89,58 @@ def apply_contact_updates(
             profile.income = income
 
 
-def handle_start(
-    message: str,
-    context: dict,
-    user: User | None,
-    profile: Profile | None,
-    media: dict | None,
-):
-    apply_profile_updates(message, context, user, profile)
-    has_cpf = bool(context.get("cpf"))
-    has_name = bool(context.get("name"))
+def build_known_context(
+    name_value: str,
+    interest: str | None,
+    property_interest: str | None,
+    property_reference: str | None,
+    cpf: str | None,
+    email: str | None,
+    income: str | None,
+    docs_preference: str | None,
+    docs_received_count: int,
+    available_properties_count: int,
+) -> str:
+    parts = []
+    if name_value:
+        parts.append(f"Nome conhecido: {name_value}.")
+    else:
+        parts.append("Nome ainda nao informado.")
 
-    if not has_cpf and not has_name:
-        return "lead.await_profile", lead_messages.START
-    if not has_cpf:
-        return "lead.await_profile", lead_messages.MISSING_PROFILE_CPF
-    if not has_name:
-        return "lead.await_profile", lead_messages.MISSING_PROFILE_NAME
-    return "lead.await_contact", lead_messages.CONTACT
+    if interest == "yes":
+        parts.append("A pessoa demonstrou interesse em locacao.")
+    elif interest == "no":
+        parts.append("A pessoa disse que nao tem interesse no momento.")
+    else:
+        parts.append("Ainda nao sabemos se ha interesse em algum imovel.")
 
+    if property_interest:
+        parts.append(f"Imovel de interesse informado: {property_interest}.")
+    else:
+        parts.append("Imovel de interesse ainda nao informado.")
 
-def handle_profile(
-    message: str,
-    context: dict,
-    user: User | None,
-    profile: Profile | None,
-    media: dict | None,
-):
-    apply_profile_updates(message, context, user, profile)
-    has_cpf = bool(context.get("cpf"))
-    has_name = bool(context.get("name"))
+    if property_reference:
+        parts.append(f"Referencia mencionada: {property_reference}.")
 
-    if not has_cpf and not has_name:
-        return "lead.await_profile", lead_messages.MISSING_PROFILE_BOTH
-    if not has_cpf:
-        return "lead.await_profile", lead_messages.MISSING_PROFILE_CPF
-    if not has_name:
-        return "lead.await_profile", lead_messages.MISSING_PROFILE_NAME
-    return "lead.await_contact", lead_messages.CONTACT
+    if available_properties_count:
+        parts.append(
+            f"Temos {available_properties_count} imovel(is) desocupado(s) no catalogo."
+        )
+    else:
+        parts.append("Nao ha imoveis desocupados no catalogo neste momento.")
 
+    if cpf:
+        parts.append("CPF ja informado.")
+    if email:
+        parts.append("E-mail ja informado.")
+    if income:
+        parts.append("Renda ja informada.")
+    if docs_preference:
+        parts.append(f"Tipo de documento escolhido: {docs_preference}.")
+    if docs_received_count:
+        parts.append(f"Ja recebemos {docs_received_count} imagem(ns) de documento.")
 
-def handle_contact(
-    message: str,
-    context: dict,
-    user: User | None,
-    profile: Profile | None,
-    media: dict | None,
-):
-    apply_contact_updates(message, context, profile)
-    has_email = bool(context.get("email"))
-    has_income = bool(context.get("income"))
-
-    if not has_email:
-        return "lead.await_contact", lead_messages.CONTACT_MISSING_EMAIL
-    if not has_income:
-        return "lead.await_contact", lead_messages.CONTACT_MISSING_INCOME
-    return "lead.await_documents", lead_messages.DOCS
-
-
-def handle_documents(
-    message: str,
-    context: dict,
-    user: User | None,
-    profile: Profile | None,
-    media: dict | None,
-):
-    if media:
-        return "lead.await_documents", lead_messages.DOCS_RECEIVED
-    return "lead.await_documents", lead_messages.WAIT_DOCS
-
-
-def handle_fallback(
-    message: str,
-    context: dict,
-    user: User | None,
-    profile: Profile | None,
-    media: dict | None,
-):
-    return "lead.await_profile", lead_messages.FALLBACK
-
-
-STATE_HANDLERS = {
-    "lead.start": handle_start,
-    "lead.await_profile": handle_profile,
-    "lead.await_contact": handle_contact,
-    "lead.await_documents": handle_documents,
-}
+    return " ".join(parts)
 
 
 async def handle_lead_message(
@@ -207,9 +177,66 @@ async def handle_lead_message(
 
         state = conversation.state or "lead.start"
         context = dict(conversation.context_json or {})
+        previous_reply = context.get("last_bot_reply", "")
 
-        handler = STATE_HANDLERS.get(state, handle_fallback)
-        new_state, reply_text = handler(message, context, user, profile, media)
+        message_text = message or ""
+        context["wants_pause"] = False
+        context["wants_human"] = False
+        context["wants_available_properties"] = False
+        context["wants_property_details"] = False
+        updates = extract_lead_update(message_text, context)
+        context.update(updates)
+
+        apply_profile_updates(message_text, context, user, profile)
+        apply_contact_updates(message_text, context, profile)
+
+        available_properties = list_available_properties(db)
+        available_properties_summary = (
+            "; ".join(summarize_property(property_obj) for property_obj in available_properties)
+            if available_properties
+            else "Nenhum imovel desocupado disponivel no momento."
+        )
+        available_properties_count = len(available_properties)
+
+        property_reference = context.get("property_reference")
+        looked_up_property = find_property_by_reference(db, property_reference)
+        property_lookup_status = "none"
+        selected_property_details = ""
+        if property_reference:
+            if looked_up_property is None:
+                property_lookup_status = "not_found"
+            else:
+                serialized_property = serialize_property(looked_up_property)
+                selected_property_details = str(serialized_property)
+                if looked_up_property.status == "vacant":
+                    property_lookup_status = "available"
+                    context["property_interest"] = (
+                        looked_up_property.title or looked_up_property.reference
+                    )
+                else:
+                    property_lookup_status = "unavailable"
+
+        if (
+            context.get("interest") is None
+            and (
+                property_reference
+                or bool(context.get("wants_available_properties"))
+                or context.get("question_topic") == "property"
+            )
+        ):
+            context["interest"] = "yes"
+
+        docs_preference = context.get("docs_preference")
+        docs_required_count = DOCS_REQUIRED_COUNT.get(docs_preference, 0)
+
+        docs_received_count = 0
+        if user_id:
+            count_stmt = (
+                select(func.count())  # pylint: disable=not-callable
+                .select_from(Document)
+                .where(Document.user_id == user_id)
+            )
+            docs_received_count = db.execute(count_stmt).scalar_one() or 0
 
         if media and media.get("path") and user_id:
             document = Document(
@@ -220,12 +247,90 @@ async def handle_lead_message(
                 extracted_json={
                     "mime": media.get("mime"),
                     "message_id": media.get("message_id"),
+                    "docs_preference": docs_preference,
                 },
             )
             db.add(document)
+            docs_received_count += 1
 
-        conversation.state = new_state
-        conversation.context_json = context
+        docs_missing_count = max(0, docs_required_count - docs_received_count)
+
+        missing_fields = []
+        name_value = context.get("name") or (user.name if user else "")
+        interest = context.get("interest")
+        property_interest = context.get("property_interest")
+        user_intent = context.get("user_intent", "unknown")
+        question_topic = context.get("question_topic")
+        wants_pause = bool(context.get("wants_pause"))
+        wants_human = bool(context.get("wants_human"))
+        wants_available_properties = bool(context.get("wants_available_properties"))
+        wants_property_details = bool(context.get("wants_property_details"))
+        should_offer_properties = any(
+            [
+                wants_available_properties,
+                wants_property_details,
+                bool(property_reference),
+                question_topic == "property",
+                interest == "yes",
+            ]
+        )
+
+        if wants_pause:
+            journey_phase = "pause"
+            new_state = "lead.paused"
+        elif wants_human:
+            journey_phase = "handoff"
+            new_state = "lead.handoff"
+        elif interest is None:
+            journey_phase = "abertura"
+            new_state = "lead.ask_interest"
+        elif interest == "no":
+            journey_phase = "sem_interesse"
+            new_state = "lead.no_interest"
+        elif property_lookup_status == "not_found":
+            journey_phase = "imovel"
+            new_state = "lead.property_not_found"
+        elif property_lookup_status == "unavailable":
+            journey_phase = "imovel"
+            new_state = "lead.property_unavailable"
+        elif not property_interest:
+            journey_phase = "imovel"
+            new_state = "lead.ask_property"
+        else:
+            if not name_value:
+                missing_fields.append("nome")
+            if not context.get("cpf"):
+                missing_fields.append("CPF")
+            if not context.get("email"):
+                missing_fields.append("e-mail")
+            if not context.get("income"):
+                missing_fields.append("renda mensal aproximada")
+
+            if missing_fields:
+                journey_phase = "pre_cadastro"
+                new_state = "lead.collect_basic"
+            elif not docs_preference:
+                journey_phase = "documentacao"
+                new_state = "lead.choose_docs"
+            elif docs_missing_count > 0:
+                journey_phase = "documentacao"
+                new_state = "lead.collect_docs"
+            else:
+                journey_phase = "analise"
+                new_state = "lead.done"
+
+        known_context = build_known_context(
+            name_value=name_value,
+            interest=interest,
+            property_interest=property_interest,
+            property_reference=property_reference,
+            cpf=context.get("cpf"),
+            email=context.get("email"),
+            income=context.get("income"),
+            docs_preference=docs_preference,
+            docs_received_count=docs_received_count,
+            available_properties_count=available_properties_count,
+        )
 
         event = Event(
             user_id=user_id,
@@ -239,6 +344,46 @@ async def handle_lead_message(
             },
         )
         db.add(event)
+        db.commit()
+
+        facts = {
+            "journey_phase": journey_phase,
+            "known_context": known_context,
+            "name": name_value,
+            "interest": interest,
+            "property_interest": property_interest or "",
+            "property_reference": property_reference or "",
+            "property_lookup_status": property_lookup_status,
+            "selected_property_details": selected_property_details,
+            "available_properties_summary": available_properties_summary,
+            "available_properties_count": available_properties_count,
+            "wants_available_properties": wants_available_properties,
+            "wants_property_details": wants_property_details,
+            "should_offer_properties": should_offer_properties,
+            "user_intent": user_intent,
+            "question_topic": question_topic or "unknown",
+            "missing_fields": ", ".join(missing_fields) if missing_fields else "nenhum",
+            "docs_preference": docs_preference or "",
+            "docs_received_count": docs_received_count,
+            "docs_missing_count": docs_missing_count,
+            "docs_rules": DOCS_RULES,
+            "actions_available": {
+                "can_pause": True,
+                "can_handoff": True,
+            },
+            "media_received": bool(media),
+            "last_message": message_text,
+            "previous_reply": previous_reply,
+        }
+        reply_text = generate_lead_reply(facts)
+
+        conversation.state = new_state
+        conversation.context_json = {
+            **context,
+            "docs_received_count": docs_received_count,
+            "last_bot_reply": reply_text,
+            "last_user_message": message_text,
+        }
         db.commit()
 
     except SQLAlchemyError as exc:

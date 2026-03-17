@@ -40,7 +40,17 @@ class Property(Base):
 
     id = Column(Integer, primary_key=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    reference = Column(String(32), unique=True, index=True, nullable=True)
+    title = Column(String(120), nullable=True)
+    category = Column(String(32), index=True, nullable=True)
     address = Column(Text, nullable=True)
+    neighborhood = Column(String(120), nullable=True)
+    bedrooms = Column(Integer, nullable=True)
+    bathrooms = Column(Integer, nullable=True)
+    monthly_rent = Column(Integer, nullable=True)
+    status = Column(String(32), index=True, nullable=True)
+    description = Column(Text, nullable=True)
+    media_json = Column(JSONB, default=list, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     owner = relationship("User", back_populates="properties")
